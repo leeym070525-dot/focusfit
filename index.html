@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FocusFit Mobile</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+  main { max-width: 480px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 22px 0 8px; }
+  .sub { color: #aaa; font-size: 14px; margin: 0 0 14px; }
+  label { display: block; margin: 12px 0 4px; font-size: 15px; color: #ccc; }
+  input[type=text], select { width: 100%; box-sizing: border-box; padding: 12px; font-size: 16px; border: 1px solid #444; border-radius: 8px; background: #1c1c1c; color: #eee; }
+  input[type=range] { width: 100%; margin: 8px 0; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 12px 0; font-size: 15px; color: #ccc; }
+  video { width: 100%; border-radius: 12px; background: #000; transform: scaleX(-1); /* 거울처럼 (camera.py의 flip과 같은 역할) */ }
+  button { width: 100%; padding: 14px; font-size: 17px; border: 0; border-radius: 10px; background: #3b82f6; color: #fff; margin: 12px 0; }
+  button.red { background: #dc2626; }
+  button.gray { background: #555; }
+  button.small { padding: 10px; font-size: 15px; }
+  button:disabled { background: #444; color: #999; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  #status { margin: 8px 0; color: #aaa; font-size: 14px; min-height: 18px; }
+  #state { margin: 14px 0 8px; padding: 14px; border-radius: 10px; background: #1c1c1c; font-size: 20px; text-align: center; }
+  #elapsed { font-size: 34px; font-weight: 600; text-align: center; margin: 8px 0; font-variant-numeric: tabular-nums; }
+  .big { font-size: 40px; text-align: center; margin: 6px 0; }
+  .box { padding: 12px 14px; border-radius: 10px; background: #1c1c1c; margin: 10px 0; font-size: 15px; line-height: 1.6; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  td, th { padding: 6px 4px; border-bottom: 1px solid #333; text-align: left; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .vals td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { background: #1c1c1c; border-radius: 10px; padding: 10px; }
+  .card b { display: block; font-size: 20px; margin-top: 2px; }
+  .card span { color: #aaa; font-size: 13px; }
+  .note { color: #888; font-size: 13px; margin: 6px 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎯 FocusFit</h1>
+  <p class="sub">카메라로 집중도를 분석하고, 내가 느낀 집중도와 비교합니다</p>
+
+  <div id="flash" class="box" hidden></div>
+  <div id="status"></div>
+
+  <!-- 1) 대기: 활동 입력 -->
+  <section id="idleView">
+    <label for="activity">지금 어떤 활동을 하시나요?</label>
+    <input type="text" id="activity" placeholder="예: 국어 공부, 코딩, 독서">
+    <label for="category">활동 카테고리 (기록에 라벨로 저장되어 나중에 AI 학습에 쓰여요)</label>
+    <select id="category"></select>
+    <p class="note">현재는 점수 계산에 영향을 주지 않고 기록에만 저장됩니다.</p>
+    <div class="box">📷 얼굴이 화면 가운데에 나오도록 카메라를 맞춰 주세요. 처음 몇 초는 정면을 바라보세요(기준 자세를 잡습니다).</div>
+    <div class="check"><input type="checkbox" id="debugOn" checked><label for="debugOn" style="margin:0">🔧 분석 값 표시 (기준값 조정용)</label></div>
+    <button id="startBtn">▶ 시작</button>
+  </section>
+
+  <!-- 2) 측정 중 -->
+  <section id="runView" hidden>
+    <h2 id="runTitle" style="margin-top:0"></h2>
+    <div id="elapsed">00:00:00</div>
+    <div id="state">-</div>
+    <video id="video" autoplay playsinline muted></video>
+    <div id="debugBox">
+      <table class="vals">
+        <tr><td>얼굴 감지 (face_found)</td><td id="v_found">-</td></tr>
+        <tr><td>고개 좌우 yaw (도)</td><td id="v_yaw">-</td></tr>
+        <tr><td>고개 위아래 pitch (도)</td><td id="v_pitch">-</td></tr>
+        <tr><td>눈 감김 (0~1)</td><td id="v_blink">-</td></tr>
+        <tr><td>시선 좌우 (-1~1)</td><td id="v_gazeX">-</td></tr>
+        <tr><td>시선 위 (0~1)</td><td id="v_gazeUp">-</td></tr>
+        <tr><td>분석 간격 (ms)</td><td id="v_dt">-</td></tr>
+        <tr><td>기준 자세 대비 좌우 편차 (도)</td><td id="v_dyaw">-</td></tr>
+        <tr><td>기준 자세 대비 상하 편차 (도)</td><td id="v_dpitch">-</td></tr>
+      </table>
+    </div>
+    <button id="stopBtn" class="red">■ 종료</button>
+  </section>
+
+  <!-- 3) 체감 점수 입력 -->
+  <section id="rateView" hidden>
+    <h2 id="rateTitle" style="margin-top:0"></h2>
+    <div class="box">총 경과 시간 <b id="rateElapsed"></b></div>
+    <p>AI 분석 결과는 저장한 뒤에 보여 드려요. 먼저 내가 느낀 집중도를 골라 주세요.</p>
+    <label for="selfScore">내가 느낀 집중도 (체감 점수, 0~100점)</label>
+    <div class="big" id="selfScoreText">50</div>
+    <input type="range" id="selfScore" min="0" max="100" step="1" value="50">
+    <p class="note">0 = 전혀 집중하지 못함 · 50 = 보통 · 100 = 완전히 몰입</p>
+    <div class="row2">
+      <button id="saveBtn">💾 저장</button>
+      <button id="skipBtn" class="gray">저장 안 함</button>
+    </div>
+  </section>
+
+  <!-- 기록과 비교 -->
+  <h2>최근 기록</h2>
+  <div id="recordsBox"></div>
+
+  <div id="compareBox" hidden>
+    <h2>🤖 AI vs 체감 집중도 비교</h2>
+    <div class="cards" id="compareCards"></div>
+    <p class="note">상관계수는 AI 점수가 내 체감과 같은 방향으로 움직이는 정도입니다 (1에 가까울수록 잘 맞음, 기록이 3회 이상일 때 표시).</p>
+  </div>
+
+  <div id="categoryBox" hidden>
+    <h2>🏷️ 활동 카테고리별 AI vs 체감</h2>
+    <div id="categoryTable"></div>
+    <p class="note">차이가 큰 카테고리에서는 AI가 그 활동의 자세를 제대로 읽지 못하고 있다는 뜻일 수 있어요.</p>
+  </div>
+
+  <h2>🧠 내 데이터로 학습하는 개인 맞춤 점수</h2>
+  <div id="learnBox"></div>
+
+  <h2>기록 관리</h2>
+  <div class="row2">
+    <button id="csvBtn" class="small">⬇ CSV 내려받기</button>
+    <button id="undoBtn" class="small gray">마지막 기록 삭제</button>
+  </div>
+  <p class="note" id="storageNote"></p>
+</main>
+
+<script type="module">
+// MediaPipe 웹 버전 (Python의 mediapipe와 같은 얼굴 모델)
+import { FaceLandmarker, FilesetResolver }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/vision_bundle.mjs";
+import { FocusJudge, STATES } from "./focus_judge.js";   // 판정 규칙 (focus_judge.py를 옮긴 것)
+import { FocusStats } from "./focus_stats.js";           // 점수 계산 (FocusStats를 옮긴 것)
+import {
+  CATEGORIES, DEFAULT_CATEGORY, formatTime, makeRow, loadRows, appendRow, removeLastRow,
+  toCsv, compareStats, categoryStats, categoryName, resultMessage, RULE_VERSION,
+} from "./records.js";
+import { train, MIN_RECORDS, RECOMMENDED_RECORDS, FEATURES } from "./personal_model.js";   // 개인 맞춤 점수 (personal_model.py를 옮긴 것)
+
+const WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/wasm";
+const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const INTERVAL_MS = 200; // 0.2초마다 분석 (app.py의 run_every=0.2와 같음)
+
+const $ = id => document.getElementById(id);
+const video = $("video");
+const statusEl = $("status");
+
+// 저장소: 막혀 있으면(시크릿 창 등) 이 페이지를 열어 둔 동안만 메모리에 보관한다
+let storage;
+let storageOk = true;
+try {
+  localStorage.setItem("focusfit_test", "1");
+  localStorage.removeItem("focusfit_test");
+  storage = localStorage;
+} catch (e) {
+  storageOk = false;
+  const mem = {};
+  storage = { getItem: k => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = v; } };
+}
+
+// --- 상태 -----------------------------------------------------------------
+let stage = "idle";            // idle → running → rating → idle
+let landmarker = null;
+let stream = null;
+let wakeLock = null;
+let judge = null, stats = null;
+let session = null;            // { activity, category, startedAt, measuredAt, elapsed, startPerf, aiSummary }
+let lastTime = 0;
+let rafId = 0;
+let debugOn = true;
+
+function setStage(next) {
+  stage = next;
+  $("idleView").hidden = next !== "idle";
+  $("runView").hidden = next !== "running";
+  $("rateView").hidden = next !== "rating";
+}
+
+// --- camera.py 역할: 카메라 열기/닫기 -------------------------------------
+async function openCamera() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, // 전면 카메라
+    audio: false,
+  });
+  video.srcObject = stream;
+  await video.play();
+}
+function releaseCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());   // 카메라 사용 표시등이 꺼진다
+  stream = null;
+  video.srcObject = null;
+}
+async function keepScreenOn() {
+  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { /* 지원하지 않으면 무시 */ }
+}
+function releaseScreen() {
+  try { if (wakeLock) wakeLock.release(); } catch (e) { /* 무시 */ }
+  wakeLock = null;
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && stage === "running") keepScreenOn();
+});
+
+// --- face_analyzer.py 역할: 사진 한 장 → 숫자 -------------------------------
+function headAngles(matrix) {
+  // 4x4 변환 행렬. data는 열 우선(column-major)이라 세 번째 열 = data[8], data[9], data[10]
+  const d = matrix.data;
+  const fx = d[8], fy = d[9], fz = d[10];             // 얼굴이 바라보는 방향 화살표
+  const toDeg = r => r * 180 / Math.PI;
+  const yaw   = toDeg(Math.atan2(fx, Math.abs(fz))); // 좌우 (abs: 앞뒤 뒤집힘 대비)
+  const pitch = toDeg(Math.asin(Math.max(-1, Math.min(1, fy)))); // 위아래
+  return { yaw, pitch };
+}
+
+function analyze(result) {
+  if (!result.faceLandmarks || result.faceLandmarks.length === 0 ||
+      !result.faceBlendshapes || result.faceBlendshapes.length === 0) {
+    return { face_found: false };
+  }
+  // 표정값 목록을 {이름: 점수} 형태로
+  const bs = {};
+  for (const c of result.faceBlendshapes[0].categories) bs[c.categoryName] = c.score;
+
+  // 값이 없으면 0 (Python의 blend.get(이름, 0.0)과 같음)
+  const g = name => bs[name] ?? 0;
+  const blink = (g("eyeBlinkLeft") + g("eyeBlinkRight")) / 2;
+  const gazeX = ((g("eyeLookOutLeft") + g("eyeLookInRight")) - (g("eyeLookInLeft") + g("eyeLookOutRight"))) / 2;
+  const gazeUp = (g("eyeLookUpLeft") + g("eyeLookUpRight")) / 2;
+  const m = result.facialTransformationMatrixes;
+  if (!m || m.length === 0) return { face_found: false };
+  const a = headAngles(m[0]);
+  // Python은 좌우 반전한 프레임을 분석한다(camera.py의 flip).
+  // 여기는 원본 프레임을 분석하므로 좌우 부호(yaw, 시선 좌우)만 뒤집어 Python과 맞춘다.
+  const yaw = -a.yaw;
+  const pitch = a.pitch;
+  return { face_found: true, yaw, pitch, blink, gazeX: -gazeX, gazeUp };
+}
+
+// --- 화면 표시 ------------------------------------------------------------
+function showValues(f, dt) {
+  const set = (id, v) => { $(id).textContent = v; };
+  set("v_found", f.face_found ? "있음" : "없음");
+  set("v_yaw",    f.face_found ? f.yaw.toFixed(1)    : "-");
+  set("v_pitch", f.face_found ? f.pitch.toFixed(1) : "-");
+  set("v_blink", f.face_found ? f.blink.toFixed(2) : "-");
+  set("v_gazeX", f.face_found ? f.gazeX.toFixed(2) : "-");
+  set("v_gazeUp", f.face_found ? f.gazeUp.toFixed(2) : "-");
+  set("v_dt", dt.toFixed(0));
+}
+function showState(state) {
+  $("state").textContent = STATES[state][0];
+  $("v_dyaw").textContent = judge.calibrated ? judge.dyaw.toFixed(1) : "-";
+  $("v_dpitch").textContent = judge.calibrated ? judge.dpitch.toFixed(1) : "-";
+}
+
+// --- 반복: 0.2초마다 한 번 분석 --------------------------------------------
+function loop(now) {
+  if (stage !== "running") return;
+  $("elapsed").textContent = formatTime((performance.now() - session.startPerf) / 1000);
+  if (now - lastTime >= INTERVAL_MS && video.readyState >= 2) {
+    const dt = lastTime ? now - lastTime : 0;
+    lastTime = now;
+    try {
+      const result = landmarker.detectForVideo(video, now);
+      const features = analyze(result);
+      if (debugOn) showValues(features, dt);
+      // 판정: Python의 FrameFeatures 이름(eye_closed, gaze_h, gaze_up)에 맞춰 넘긴다
+      const t = now / 1000;
+      const state = judge.update({
+        face_found: features.face_found,
+        yaw: features.yaw, pitch: features.pitch,
+        eye_closed: features.blink, gaze_h: features.gazeX, gaze_up: features.gazeUp,
+      }, t);
+      stats.add(state, t, judge.dyaw, judge.dpitch);   // 상태별 시간 집계 (app.py와 같은 순서)
+      showState(state);
+    } catch (e) {
+      statusEl.textContent = "분석 오류: " + e.message; // 오류가 나도 반복은 계속
+    }
+  }
+  rafId = requestAnimationFrame(loop);
+}
+
+// --- 얼굴 모델 불러오기 (처음 한 번만) --------------------------------------
+async function loadLandmarker() {
+  if (landmarker) return;
+  statusEl.textContent = "얼굴 모델 불러오는 중...";
+  const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+  const makeOptions = delegate => ({
+    baseOptions: { modelAssetPath: MODEL_URL, delegate },
+    runningMode: "VIDEO",
+    numFaces: 1,
+    outputFaceBlendshapes: true,               // 눈 깜빡임, 시선
+    outputFacialTransformationMatrixes: true, // 고개 각도
+  });
+  try {
+    landmarker = await FaceLandmarker.createFromOptions(fileset, makeOptions("GPU"));
+  } catch (gpuError) {
+    // GPU를 못 쓰는 기기는 CPU로 다시 시도한다
+    statusEl.textContent = "GPU 사용 불가, CPU로 다시 시도하는 중...";
+    landmarker = await FaceLandmarker.createFromOptions(fileset, makeOptions("CPU"));
+  }
+}
+
+// --- 시작 / 종료 / 저장 -----------------------------------------------------
+$("startBtn").addEventListener("click", async () => {
+  const btn = $("startBtn");
+  btn.disabled = true;
+  $("flash").hidden = true;
+  try {
+    await loadLandmarker();
+    statusEl.textContent = "카메라 켜는 중...";
+    await openCamera();
+  } catch (e) {
+    releaseCamera();
+    statusEl.textContent = "시작 실패: " + e.message +
+      " (카메라 권한을 허용했는지, https 주소인지 확인하세요)";
+    btn.disabled = false;
+    return;
+  }
+  debugOn = $("debugOn").checked;
+  $("debugBox").hidden = !debugOn;
+  judge = new FocusJudge();   // 시작할 때마다 기준 자세를 새로 잡는다
+  stats = new FocusStats();
+  session = {
+    activity: $("activity").value,
+    category: $("category").value,
+    startedAt: new Date(),
+    measuredAt: null,
+    elapsed: 0,
+    startPerf: performance.now(),
+    aiSummary: null,
+  };
+  $("runTitle").textContent = "🔴 측정 중: " + ((session.activity || "").trim() || "활동 없음");
+  $("elapsed").textContent = "00:00:00";
+  $("state").textContent = "-";
+  lastTime = 0;
+  statusEl.textContent = "분석 중";
+  setStage("running");
+  keepScreenOn();
+  rafId = requestAnimationFrame(loop);
+  btn.disabled = false;
+});
+
+$("stopBtn").addEventListener("click", () => {
+  cancelAnimationFrame(rafId);
+  session.elapsed = (performance.now() - session.startPerf) / 1000;
+  session.measuredAt = new Date();
+  session.aiSummary = stats.summary();    // 분석 시간이 너무 짧으면 null
+  releaseCamera();
+  releaseScreen();
+  statusEl.textContent = "";
+  $("rateTitle").textContent = "✅ 측정 완료: " + ((session.activity || "").trim() || "활동 없음");
+  $("rateElapsed").textContent = formatTime(session.elapsed);
+  $("selfScore").value = 50;
+  $("selfScoreText").textContent = "50";
+  setStage("rating");
+});
+
+$("selfScore").addEventListener("input", e => { $("selfScoreText").textContent = e.target.value; });
+
+function backToIdle() {
+  session = null; judge = null; stats = null;
+  $("activity").value = "";
+  setStage("idle");
+}
+
+$("saveBtn").addEventListener("click", () => {
+  const selfScore = Number($("selfScore").value);
+  const row = makeRow({
+    activity: session.activity, category: session.category,
+    startedAt: session.startedAt, measuredAt: session.measuredAt,
+    elapsed: session.elapsed, selfScore, ai: session.aiSummary,
+    device: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent) ? "모바일" : "PC",
+  });
+  const priorModel = train(loadRows(storage));   // 이번 기록을 저장하기 전의 기록으로 학습 (app.py와 같은 순서)
+  if (!appendRow(storage, row)) {
+    statusEl.textContent = "저장에 실패했습니다. 브라우저 저장 공간이 막혀 있는지 확인하세요.";
+    return;
+  }
+  const lines = resultMessage({
+    activity: session.activity, elapsed: session.elapsed, selfScore, ai: session.aiSummary,
+  });
+  const personal = priorModel.predict(session.aiSummary);
+  if (personal !== null) {
+    lines.push(`🧠 개인 맞춤 점수 ${personal.toFixed(1)}점 (내 기록 ${priorModel.nUsed}건으로 학습한 보정 적용)`);
+  }
+  showFlash(lines);
+  backToIdle();
+  renderRecords();
+});
+$("skipBtn").addEventListener("click", () => { backToIdle(); });
+
+function showFlash(lines) {
+  const box = $("flash");
+  box.replaceChildren(...lines.flatMap((line, i) => {
+    const p = document.createElement("div");
+    p.textContent = line;       // 사용자 입력이 섞여 있어도 글자로만 넣는다
+    if (i === 0) p.style.fontWeight = "600";
+    return [p];
+  }));
+  box.hidden = false;
+}
+
+// --- 기록 / 비교 표시 -------------------------------------------------------
+function makeTable(headers, rows, numCols = []) {
+  const table = document.createElement("table");
+  const head = table.insertRow();
+  headers.forEach((h, i) => { const th = document.createElement("th"); th.textContent = h; if (numCols.includes(i)) th.className = "num"; head.appendChild(th); });
+  rows.forEach(r => {
+    const tr = table.insertRow();
+    r.forEach((v, i) => { const td = tr.insertCell(); td.textContent = v; if (numCols.includes(i)) td.className = "num"; });
+  });
+  return table;
+}
+
+function renderRecords() {
+  const rows = loadRows(storage);                  // 오래된 순
+  const recent = rows.slice().reverse().slice(0, 10);
+  const box = $("recordsBox");
+  if (recent.length === 0) {
+    const p = document.createElement("div");
+    p.className = "box"; p.textContent = "아직 저장된 기록이 없습니다.";
+    box.replaceChildren(p);
+  } else {
+    box.replaceChildren(makeTable(
+      ["시작", "활동", "분류", "초", "AI", "체감"],
+      recent.map(r => [
+        String(r["시작 시각"]).slice(5, 16), r["활동명"], categoryName(r["활동 카테고리"]),
+        Math.round(Number(r["경과 시간(초)"])), r["AI 점수(0~100)"], r["체감 점수(0~100)"],
+      ]),
+      [3, 4, 5],
+    ));
+  }
+
+  const cmp = compareStats(rows);
+  $("compareBox").hidden = !cmp;
+  if (cmp) {
+    const cards = [
+      ["비교한 기록", `${cmp.count}회`],
+      ["평균 점수 차이", `${cmp.meanGap.toFixed(1)}점`],
+      ["10점 이내 일치율", `${cmp.within10.toFixed(0)}%`],
+      ["상관계수", cmp.correlation === null ? "-" : (cmp.correlation >= 0 ? "+" : "") + cmp.correlation.toFixed(2)],
+    ];
+    $("compareCards").replaceChildren(...cards.map(([label, value]) => {
+      const div = document.createElement("div"); div.className = "card";
+      const s = document.createElement("span"); s.textContent = label;
+      const b = document.createElement("b"); b.textContent = value;
+      div.append(s, b); return div;
+    }));
+  }
+
+  const cats = categoryStats(rows);
+  $("categoryBox").hidden = cats.length === 0;
+  if (cats.length) {
+    $("categoryTable").replaceChildren(makeTable(
+      ["카테고리", "기록", "AI", "체감", "차이"],
+      cats.map(c => [categoryName(c.key), c.count, c.meanAi, c.meanSelf, c.meanGap]),
+      [1, 2, 3, 4],
+    ));
+  }
+  renderLearning(rows);
+  $("storageNote").textContent =
+    `저장된 기록 ${rows.length}건 · 규칙 버전 ${RULE_VERSION}` +
+    (storageOk ? " · 이 기기의 이 브라우저에만 저장됩니다(다른 기기와 합치려면 CSV로 내려받으세요)."
+               : " · ⚠ 브라우저 저장소를 쓸 수 없어 이 페이지를 닫으면 기록이 사라집니다. CSV로 내려받아 두세요.");
+}
+
+// --- 학습 상태 표시 ---------------------------------------------------------
+function svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function lineChart(model) {
+  const W = 320, H = 150, pad = 8, n = model.selfScores.length;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img", "aria-label": "체감, 규칙 기반, 학습 모델 점수 비교 선 그래프" });
+  const x = i => pad + (n === 1 ? 0 : (W - 2 * pad) * i / (n - 1));
+  const y = v => H - pad - (H - 2 * pad) * v / 100;
+  [["체감", model.selfScores, "#ffffff", ""], ["규칙 기반", model.ruleScores, "#ffb347", "4 3"], ["학습 모델", model.modelScores, "#4dd0a0", ""]].forEach(([, values, color, dash]) => {
+    const attrs = { points: values.map((v, i) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: color, "stroke-width": "2" };
+    if (dash) attrs["stroke-dasharray"] = dash;
+    svg.appendChild(svgEl("polyline", attrs));
+  });
+  return svg;
+}
+
+function renderLearning(rows) {
+  const model = train(rows);
+  const box = $("learnBox");
+  const parts = [];
+  const note = text => { const p = document.createElement("p"); p.className = "note"; p.textContent = text; return p; };
+
+  if (!model.ready) {
+    const div = document.createElement("div");
+    div.className = "box";
+    div.textContent = `학습 준비 중: ${Math.min(model.nUsed, MIN_RECORDS)} / ${MIN_RECORDS}건 (체감 점수까지 저장한 기록이 ${MIN_RECORDS}건 이상이면 학습을 시작합니다)`;
+    const bar = document.createElement("progress");
+    bar.max = MIN_RECORDS; bar.value = Math.min(model.nUsed, MIN_RECORDS); bar.style.width = "100%";
+    div.append(document.createElement("br"), bar);
+    parts.push(div);
+    if (model.nSkipped) parts.push(note(`입력값이 비어 제외한 기록: ${model.nSkipped}건`));
+  } else {
+    const delta = model.maeModel - model.maeRule;
+    const cards = [
+      ["학습에 쓴 기록", `${model.nUsed}건`],
+      ["규칙 기반 점수 오차", `${model.maeRule.toFixed(1)}점`],
+      ["학습 모델 오차", `${model.maeModel.toFixed(1)}점 (${delta >= 0 ? "+" : ""}${delta.toFixed(1)})`],
+    ];
+    const grid = document.createElement("div");
+    grid.className = "cards";
+    cards.forEach(([label, value]) => {
+      const div = document.createElement("div"); div.className = "card";
+      const s = document.createElement("span"); s.textContent = label;
+      const b = document.createElement("b"); b.textContent = value;
+      div.append(s, b); grid.appendChild(div);
+    });
+    parts.push(grid);
+    parts.push(note(model.improved
+      ? "학습 모델이 규칙 기반 점수보다 내 체감에 더 가깝습니다 (한 건씩 빼고 맞혀 보는 검증 기준)."
+      : "아직 학습 모델이 규칙 기반 점수보다 나아지지 않았습니다. 기록이 더 쌓이면 달라질 수 있어요."));
+    if (model.nUsed < RECOMMENDED_RECORDS) parts.push(note(`기록 ${RECOMMENDED_RECORDS}건 이상이면 결과를 더 믿을 수 있습니다 (지금 ${model.nUsed}건).`));
+    if (model.nSkipped) parts.push(note(`입력값이 비어 제외한 기록: ${model.nSkipped}건`));
+    parts.push(lineChart(model));
+    parts.push(note("흰색: 체감 · 주황 점선: 규칙 기반 · 초록: 학습 모델 (오래된 기록 → 최근 기록 순)"));
+    parts.push(makeTable(["입력값", "가중치"],
+      FEATURES.map(([, , name], i) => [name + " 100%", (model.weights[i] >= 0 ? "+" : "") + model.weights[i].toFixed(1) + "점"]).concat([["기본 보정", (model.bias >= 0 ? "+" : "") + model.bias.toFixed(1) + "점"]]),
+      [1]));
+  }
+  box.replaceChildren(...parts);
+}
+
+$("csvBtn").addEventListener("click", () => {
+  const rows = loadRows(storage);
+  if (rows.length === 0) { statusEl.textContent = "내려받을 기록이 없습니다."; return; }
+  const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  const d = new Date();
+  a.href = URL.createObjectURL(blob);
+  a.download = `focusfit_records_${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+$("undoBtn").addEventListener("click", () => {
+  if (loadRows(storage).length === 0) return;
+  if (window.confirm("가장 최근에 저장한 기록 1건을 삭제할까요?")) { removeLastRow(storage); renderRecords(); }
+});
+
+// --- 처음 화면 -------------------------------------------------------------
+for (const [key, label] of Object.entries(CATEGORIES)) {
+  const option = document.createElement("option");
+  option.value = key; option.textContent = label;
+  if (key === DEFAULT_CATEGORY) option.selected = true;
+  $("category").appendChild(option);
+}
+renderRecords();
+setStage("idle");
+</script>
+</body>
+</html>
