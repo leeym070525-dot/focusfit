@@ -1,11 +1,12 @@
 // 활동 기록 저장·조회·CSV 내보내기 (focus_timer.py의 FocusFit 기록 부분을 JavaScript로 옮긴 것)
 //
 // 기록은 브라우저(localStorage)에 저장한다. 열 구성은 Python 앱의 focus_sessions.csv와 같고,
-// 맨 끝에 '규칙 버전', '기기' 두 열이 더 있다.
+// 맨 끝에 '기기' 열이 하나 더 있다.
 // (판정 규칙을 바꾸면 이전 기록과 비교할 수 없으므로 어떤 규칙으로 측정했는지 남겨 둔다)
 import { pearson, pyRound1 } from "./focus_stats.js";
+import { RULE_VERSION } from "./focus_judge.js";   // 판정 기준을 바꾸면 focus_judge.js에서 올린다
 
-export const RULE_VERSION = "v1";   // focus_judge.js의 기준값을 바꾸면 이 값을 올린다
+export { RULE_VERSION };
 export const STORAGE_KEY = "focusfit_records_v1";
 
 export const CSV_HEADER = [
@@ -13,6 +14,7 @@ export const CSV_HEADER = [
   "AI 점수(0~100)", "체감 점수(0~100)",
   "분석 시간(초)", "얼굴 감지(%)", "고개 돌림/숙임(%)", "졸음(%)",
   "시선 이탈(%)", "자리 이탈(%)", "평균 좌우 편차(도)", "평균 상하 편차(도)",
+  "하품(%)", "피로 신호(%)", "하품 횟수",   // [v2] 하품·피로 신호
   "규칙 버전", "기기",
 ];
 // 활동 카테고리: 판정에는 쓰지 않고 기록에 라벨로만 저장한다.
@@ -29,6 +31,7 @@ export const AI_KEYS = [
   "focus_percent",
   "analyzed_seconds", "face_percent", "head_turn_percent", "drowsy_percent",
   "gaze_away_percent", "away_percent", "mean_abs_yaw", "mean_abs_pitch",
+  "yawn_percent", "fatigue_percent", "yawn_count",
 ];
 
 const pad = n => String(n).padStart(2, "0");
@@ -68,7 +71,10 @@ export function makeRow({ activity, category, startedAt, measuredAt, elapsed, se
     "자리 이탈(%)": v("away_percent"),
     "평균 좌우 편차(도)": v("mean_abs_yaw"),
     "평균 상하 편차(도)": v("mean_abs_pitch"),
-    "규칙 버전": RULE_VERSION,
+    "하품(%)": v("yawn_percent"),
+    "피로 신호(%)": v("fatigue_percent"),
+    "하품 횟수": v("yawn_count"),
+    "규칙 버전": ai ? RULE_VERSION : "",   // AI 분석이 없으면 규칙과 무관하므로 빈칸
     "기기": device || "",
   };
 }
@@ -184,6 +190,7 @@ export function resultMessage({ activity, elapsed, selfScore, ai }) {
     lines.push(`🤖 AI 점수 ${ai.focus_percent}점 (${compare})`);
     lines.push(`고개 돌림/숙임 ${ai.head_turn_percent}% · 시선 이탈 ${ai.gaze_away_percent}% · ` +
                `졸음 ${ai.drowsy_percent}% · 자리 이탈 ${ai.away_percent}%`);
+    lines.push(`하품 ${ai.yawn_count}회 (${ai.yawn_percent}%) · 피로 신호 ${ai.fatigue_percent}%`);
   } else {
     lines.push("(AI 분석 결과 없음: 카메라 미사용, 분석 불가, 또는 측정 시간이 너무 짧음)");
   }

@@ -2,7 +2,7 @@
 //
 // 판정 상태를 프레임마다 받아 상태별 시간을 쌓아 두었다가, 측정이 끝나면
 // '집중 시간의 비율'을 AI 점수(0~100)로 요약한다. 계산 순서와 반올림은 Python 버전과 같다.
-import { STATES, MAX_DT } from "./focus_judge.js";
+import { STATES, MAX_DT, FATIGUE_CREDIT } from "./focus_judge.js";
 
 // Python의 round(x, 1)과 같은 결과를 내는 반올림 (소수 첫째 자리).
 // Python은 정확히 가운데인 값(0.25, 0.75 ...)을 짝수 쪽으로 올리고, JavaScript의 toFixed는 큰 쪽으로 올린다.
@@ -60,10 +60,13 @@ export class FocusStats {
     this._absDyaw = 0.0;
     this._absDpitch = 0.0;
     this._featureSeconds = 0.0;
+    this.yawnCount = 0;
   }
 
   // 한 프레임을 반영한다. 직전 프레임과의 간격(최대 MAX_DT)을 시간으로 더한다.
-  add(state, t, dyaw = 0.0, dpitch = 0.0) {
+  // yawnCount: 판정기(FocusJudge)가 센 하품 횟수 (요약에 함께 남긴다)
+  add(state, t, dyaw = 0.0, dpitch = 0.0, yawnCount = null) {
+    if (yawnCount !== null && yawnCount !== undefined) this.yawnCount = yawnCount;
     if (this._lastT !== null) {
       const dt = Math.min(Math.max(t - this._lastT, 0.0), MAX_DT);
       this.seconds[state] += dt;
@@ -91,9 +94,11 @@ export class FocusStats {
     if (total < FocusStats.MIN_SECONDS) return null;
     const pct = key => pyRound1(this.seconds[key] / total * 100);
     const fs = this._featureSeconds;
+    // AI 점수(0~100) = 분석한 시간 중 집중으로 인정한 시간의 비율
+    //   '집중 중'은 전부, '피로 신호'는 FATIGUE_CREDIT(절반)만 인정한다  [v2]
+    const credited = this.seconds.focused + FATIGUE_CREDIT * this.seconds.fatigued;
     return {
-      // AI 점수(0~100) = 분석한 시간 중 '집중 중'이었던 시간의 비율
-      focus_percent: pct("focused"),
+      focus_percent: pyRound1(credited / total * 100),
       analyzed_seconds: pyRound1(total),
       face_percent: pyRound1(100 - pct("away") - pct("head_lost")),
       head_turn_percent: pyRound1(pct("head_turn") + pct("head_lost")),
@@ -102,6 +107,9 @@ export class FocusStats {
       away_percent: pct("away"),
       mean_abs_yaw: fs ? pyRound1(this._absDyaw / fs) : 0.0,
       mean_abs_pitch: fs ? pyRound1(this._absDpitch / fs) : 0.0,
+      yawn_percent: pct("yawning"),       // [v2] 하품한 시간 비율
+      fatigue_percent: pct("fatigued"),   // [v2] 정면이지만 피로 신호가 있던 시간 비율
+      yawn_count: this.yawnCount,         // [v2] 하품 횟수
     };
   }
 }

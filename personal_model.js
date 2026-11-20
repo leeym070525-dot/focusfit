@@ -4,13 +4,15 @@
 // 학습해서 보정한다.
 //
 //     개인 맞춤 점수 = 규칙 기반 AI 점수 + 보정값
-//     보정값 = 절편 + (고개 돌림·졸음·시선 이탈·자리 이탈 비율) × 학습한 가중치
+//     보정값 = 절편 + (고개 돌림·졸음·시선 이탈·자리 이탈·피로 신호 비율) × 학습한 가중치
 //
 // - 학습 방법: 릿지 회귀(과적합을 줄이는 선형 회귀). 정답은 사용자가 입력한 체감 점수.
 // - 기록이 MIN_RECORDS건 미만이면 학습하지 않는다(이때는 규칙 기반 점수만 쓴다).
 // - 정직한 평가: 한 건을 빼고 나머지로 학습해 그 한 건을 맞혀 보는 방식(교차검증)으로
 //   '규칙 기반 점수'와 '학습 모델'의 오차를 비교한다.
 // - 모델은 저장하지 않고, 기록에서 매번 다시 학습한다(기록이 늘면 자동으로 갱신된다).
+// - 지금 판정 규칙(RULE_VERSION)으로 측정한 기록만 쓴다 (규칙이 다르면 점수 기준이 다르다).
+import { RULE_VERSION } from "./focus_judge.js";
 
 export const MIN_RECORDS = 8;            // 이 건수 이상이어야 학습한다
 export const RECOMMENDED_RECORDS = 20;   // 이 건수 이상이면 결과를 믿을 만하다
@@ -24,7 +26,9 @@ export const FEATURES = [
   ["졸음(%)", "drowsy_percent", "졸음"],
   ["시선 이탈(%)", "gaze_away_percent", "시선 이탈"],
   ["자리 이탈(%)", "away_percent", "자리 이탈"],
+  ["피로 신호(%)", "fatigue_percent", "피로 신호"],   // [v2]
 ];
+export const VERSION_COLUMN = "규칙 버전";
 
 // 문자열(또는 숫자)을 숫자로 바꾼다. 비어 있거나 숫자가 아니면 null.
 function toFloat(value) {
@@ -38,7 +42,8 @@ function toFloat(value) {
 
 // 기록(객체 목록)에서 학습용 배열을 만든다.
 // AI 점수·체감 점수·입력값이 모두 숫자인 기록만 쓴다(오래된 순으로 정렬).
-// 반환: { x, ai, y, skipped, labels }
+// 지금 규칙 버전으로 측정한 기록만 쓴다.
+// 반환: { x, ai, y, skipped, labels, otherVersion }
 export function buildDataset(records) {
   const sorted = records
     .map((record, index) => ({ record, index }))
@@ -49,8 +54,12 @@ export function buildDataset(records) {
     .map(item => item.record);
 
   const rows = [];
-  let skipped = 0;
+  let skipped = 0, otherVersion = 0;
   for (const record of sorted) {
+    if ((record[VERSION_COLUMN] ?? "") !== RULE_VERSION) {
+      otherVersion += 1;
+      continue;
+    }
     const ai = toFloat(record[AI_COLUMN]);
     const target = toFloat(record[SELF_COLUMN]);
     const feats = FEATURES.map(([column]) => toFloat(record[column]));
@@ -66,6 +75,7 @@ export function buildDataset(records) {
     y: rows.map(r => r.target),
     skipped,
     labels: rows.map(r => r.label),
+    otherVersion,
   };
 }
 
@@ -138,9 +148,10 @@ export function selectAlpha(x, target) {
 
 // 학습 결과. ready가 false면 아직 학습하지 않은 상태다.
 export class ModelResult {
-  constructor(nUsed = 0, nSkipped = 0) {
+  constructor(nUsed = 0, nSkipped = 0, nOtherVersion = 0) {
     this.nUsed = nUsed;          // 학습에 쓴 기록 수
     this.nSkipped = nSkipped;    // 입력값이 비어 제외한 기록 수
+    this.nOtherVersion = nOtherVersion;   // 이전 판정 규칙으로 측정해 제외한 기록 수
     this.ready = false;
     this.weights = [];           // 입력값별 가중치(100% 지속 시 보정 점수)
     this.bias = 0.0;
@@ -151,6 +162,8 @@ export class ModelResult {
     this.selfScores = [];
     this.ruleScores = [];
     this.modelScores = [];       // 각 기록을 '빼고' 학습해 맞힌 점수
+    this.featureMin = [];        // 학습한 기록의 입력값 범위 (비율 0~1)
+    this.featureMax = [];
   }
 
   // 학습 모델이 규칙 기반 점수보다 오차가 작은가.
@@ -161,7 +174,9 @@ export class ModelResult {
   // 측정 요약(FocusStats.summary 결과)으로 보정값을 계산한다. 학습 전이면 0.
   adjust(summary) {
     if (!this.ready || !summary) return 0.0;
-    const feats = FEATURES.map(([, key]) => (summary[key] ?? 0.0) / 100.0);
+    // 학습한 기록에 없던 범위의 값은 범위 끝값으로 맞춘다 (직선 모델이 지나치게 뻗어 나가지 않게)
+    const feats = FEATURES.map(([, key], j) =>
+      Math.min(this.featureMax[j], Math.max(this.featureMin[j], (summary[key] ?? 0.0) / 100.0)));
     return dot(feats, this.weights) + this.bias;
   }
 
@@ -175,8 +190,8 @@ export class ModelResult {
 
 // 저장된 기록 전체로 학습한다. 기록이 부족하면 ready=false인 결과를 돌려준다.
 export function train(records) {
-  const { x, ai, y, skipped, labels } = buildDataset(records);
-  const result = new ModelResult(y.length, skipped);
+  const { x, ai, y, skipped, labels, otherVersion } = buildDataset(records);
+  const result = new ModelResult(y.length, skipped, otherVersion);
   if (y.length < MIN_RECORDS) return result;
 
   const residual = y.map((v, i) => v - ai[i]);   // 규칙 점수가 체감과 얼마나 어긋났는가 = 모델이 맞힐 대상
@@ -206,5 +221,7 @@ export function train(records) {
   result.selfScores = y;
   result.ruleScores = ai;
   result.modelScores = heldOut;
+  result.featureMin = FEATURES.map((_, j) => Math.min(...x.map(row => row[j])));
+  result.featureMax = FEATURES.map((_, j) => Math.max(...x.map(row => row[j])));
   return result;
 }
