@@ -14,7 +14,12 @@
 export const CALIBRATION_FRAMES = 10;  // 처음 N프레임으로 '정면 기준 자세'를 잡는다
 export const YAW_LIMIT = 30.0;         // 기준 자세에서 좌우로 이 각도를 넘으면 '고개 돌림'
 export const PITCH_LIMIT = 30.0;       // 기준 자세에서 위아래로 이 각도를 넘으면 '고개 돌림'
-export const EYE_CLOSED_SCORE = 0.5;   // 눈 감김 점수(0~1)가 이 값 이상이면 눈을 감은 것
+export const EYE_CLOSED_SCORE = 0.5;   // 눈 감김 기준의 최솟값 (0~1)
+// [v3] 눈 감김 기준을 사람마다 맞춘다: 기준 자세를 잡는 동안의 '평소 눈 감김'(중앙값)보다
+//      EYE_CLOSED_MARGIN 이상 더 감았을 때만 감은 것으로 본다 (화면이 카메라보다 아래에 있거나
+//      원래 눈이 가는 사람도 공정하게). 감음 기준 = min(최대, max(최솟값, 평소 + 여유))
+export const EYE_CLOSED_MARGIN = 0.25;
+export const EYE_CLOSED_MAX = 0.85;     // 실제로 감은 눈을 놓치지 않도록 상한   // 눈 감김 점수(0~1)가 이 값 이상이면 눈을 감은 것
 export const DROWSY_SECONDS = 1.0;     // 눈을 이 시간 이상 연속으로 감고 있으면 '졸음'
 export const GAZE_H_LIMIT = 0.5;       // 시선이 좌우로 이 값을 넘게 치우치면 '시선 이탈'
 export const GAZE_UP_LIMIT = 0.6;      // 시선이 위로 이 값을 넘게 향하면 '시선 이탈'
@@ -33,7 +38,7 @@ export const PERCLOS_MIN_SECONDS = 10.0; // 최근 구간에 얼굴이 이 시�
 export const YAWN_RECENT_SECONDS = 60.0; // 하품 뒤 이 시간 동안은 피로 신호
 export const FATIGUE_CREDIT = 0.5;       // '피로 신호' 시간은 점수에 이 비율만큼만 집중으로 인정
 
-export const RULE_VERSION = "v2";        // 판정 기준을 바꾸면 이 값을 올린다 (기록에 함께 저장된다)
+export const RULE_VERSION = "v3";        // 판정 기준을 바꾸면 이 값을 올린다 (기록에 함께 저장된다)
 
 // 상태 이름 → [표시 문구, 집중 여부]
 export const STATES = {
@@ -63,6 +68,9 @@ export class FocusJudge {
   constructor() {
     this._calibYaw = [];
     this._calibPitch = [];
+    this._calibEye = [];
+    this.baseEye = 0.0;                      // [v3] 평소 눈 감김 (기준 자세를 잡는 동안의 중앙값)
+    this.eyeThreshold = EYE_CLOSED_SCORE;    // [v3] 이 값 이상이면 눈을 감은 것으로 본다
     this.baseYaw = 0.0;
     this.basePitch = 0.0;
     this._eyesClosedSince = null;
@@ -106,9 +114,12 @@ export class FocusJudge {
     if (!this.calibrated) {
       this._calibYaw.push(f.yaw);
       this._calibPitch.push(f.pitch);
+      this._calibEye.push(f.eye_closed);
       if (this.calibrated) {
         this.baseYaw = median(this._calibYaw);
         this.basePitch = median(this._calibPitch);
+        this.baseEye = median(this._calibEye);
+        this.eyeThreshold = Math.min(EYE_CLOSED_MAX, Math.max(EYE_CLOSED_SCORE, this.baseEye + EYE_CLOSED_MARGIN));
       }
       return "calibrating";
     }
@@ -118,7 +129,7 @@ export class FocusJudge {
     this._updateFatigue(f, t);
 
     // 2) 눈을 오래 감고 있으면 졸음 (한 번 깜빡이는 건 무시)
-    if (f.eye_closed >= EYE_CLOSED_SCORE) {
+    if (f.eye_closed >= this.eyeThreshold) {
       if (this._eyesClosedSince === null) this._eyesClosedSince = t;
       if (t - this._eyesClosedSince >= DROWSY_SECONDS) return "drowsy";
     } else {
@@ -151,7 +162,7 @@ export class FocusJudge {
   _updateFatigue(f, t) {
     const dt = this._lastFaceT === null ? 0.0 : Math.min(Math.max(t - this._lastFaceT, 0.0), MAX_DT);
     this._lastFaceT = t;
-    this._eyeWindow.push([t, dt, f.eye_closed >= EYE_CLOSED_SCORE]);
+    this._eyeWindow.push([t, dt, f.eye_closed >= this.eyeThreshold]);
     while (this._eyeWindow.length && this._eyeWindow[0][0] <= t - FATIGUE_WINDOW) this._eyeWindow.shift();
     let seen = 0.0, closed = 0.0;
     for (const [, d, isClosed] of this._eyeWindow) {
