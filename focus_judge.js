@@ -101,7 +101,8 @@ export class FocusJudge {
       this._mouthOpenSince = null;
       this.yawning = false;
       this._inYawn = false;
-      if (!this.calibrated) return "away";
+      // 기준 자세를 아직 못 잡았으면(카메라 위치를 맞추는 중) 자리 이탈로 세지 않는다 (테스트 T10에서 발견)
+      if (!this.calibrated) return "calibrating";
       if (this._lostSince === null) this._lostSince = t;
       // this.dyaw/dpitch에는 얼굴이 마지막으로 보였을 때의 편차가 남아 있다
       const turned = Math.abs(this.dyaw) >= LOST_POSE_YAW || Math.abs(this.dpitch) >= LOST_POSE_PITCH;

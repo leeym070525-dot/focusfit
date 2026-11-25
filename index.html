@@ -241,8 +241,9 @@
 
 <script type="module">
 // MediaPipe 웹 버전 (Python의 mediapipe와 같은 얼굴 모델)
-import { FaceLandmarker, FilesetResolver }
-  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/vision_bundle.mjs";
+// MediaPipe는 [측정 시작]을 누를 때 불러온다. 인터넷이 끊겨 못 받아도 기록·비교·학습 화면은 쓸 수 있게
+// (테스트 T14: 맨 위에서 불러오면 실패할 때 화면 전체가 비어 버리던 문제)
+const MEDIAPIPE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.0/vision_bundle.mjs";
 import { FocusJudge, STATES, RULE_VERSION, PERCLOS_LIMIT } from "./focus_judge.js";   // 판정 규칙 (focus_judge.py를 옮긴 것)
 import { FocusStats } from "./focus_stats.js";                                       // 점수 계산
 import {
@@ -386,12 +387,13 @@ function showValues(f, dt) {
 }
 
 // 점수: 시작부터 지금까지 집중으로 인정한 시간의 비율 (종료 후 저장되는 AI 점수와 같은 계산)
-function showScore(summary, calibrated = false) {
+function showScore(summary, calibrated = false, faceFound = true) {
   const box = $("scoreBox"), warn = $("lowWarn");
   if (!summary) {   // 기준 자세를 잡는 중이거나 분석 시간이 3초 미만
     $("score").textContent = "--";
     $("scoreNote").textContent = calibrated ? "점수 계산 중... (3초 정도 걸려요)"
-                                            : "처음 3초는 공부할 자세 그대로 있어 주세요 (기준 자세를 잡는 중)";
+      : faceFound ? "처음 3초는 공부할 자세 그대로 있어 주세요 (기준 자세를 잡는 중)"
+      : "얼굴이 보이지 않아요. 얼굴이 화면 가운데 오도록 폰 위치를 맞춰 주세요.";   // 테스트 T10에서 추가
     box.classList.remove("low");
     warn.hidden = true;
     return;
@@ -406,12 +408,12 @@ function showScore(summary, calibrated = false) {
 }
 
 // 집중에 영향을 주는 신호 3가지 (눈·하품·얼굴)
-function showSignals(state) {
+function showSignals(state, faceFound) {
   const set = (id, text, warn) => { const el = $(id); el.querySelector("b").textContent = text; el.classList.toggle("warn", warn); };
   if (judge.perclos === null) set("sigEyes", "측정 중", false);
   else set("sigEyes", (judge.perclos * 100).toFixed(0) + "%", judge.perclos >= PERCLOS_LIMIT);
   set("sigYawn", judge.yawnCount + "회", judge.yawning || judge.yawnCount > 0);
-  const lost = state === "away" || state === "head_lost";
+  const lost = !faceFound;
   set("sigFace", lost ? "안 보임" : "정상", lost);
   $("state").textContent = "현재 상태: " + STATES[state][0];
 }
@@ -435,8 +437,8 @@ function loop(now) {
       }, t);
       stats.add(state, t, judge.dyaw, judge.dpitch, judge.yawnCount);   // 상태별 시간 집계 (app.py와 같은 순서)
       if (debugOn) showValues(features, dt);
-      showSignals(state);
-      showScore(stats.summary(), judge.calibrated);
+      showSignals(state, features.face_found);
+      showScore(stats.summary(), judge.calibrated, features.face_found);
     } catch (e) {
       statusEl.textContent = "분석 오류: " + e.message;   // 오류가 나도 반복은 계속
     }
@@ -448,6 +450,12 @@ function loop(now) {
 async function loadLandmarker() {
   if (landmarker) return;
   statusEl.textContent = "얼굴 모델 불러오는 중...";
+  let FaceLandmarker, FilesetResolver;
+  try {
+    ({ FaceLandmarker, FilesetResolver } = await import(MEDIAPIPE_URL));
+  } catch (e) {
+    throw new Error("AI 모델을 내려받지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.");
+  }
   const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
   const makeOptions = delegate => ({
     baseOptions: { modelAssetPath: MODEL_URL, delegate },
@@ -470,11 +478,17 @@ $("startBtn").addEventListener("click", async () => {
   btn.disabled = true;
   try {
     await loadLandmarker();
+  } catch (e) {
+    statusEl.textContent = "시작 실패: " + e.message;
+    btn.disabled = false;
+    return;
+  }
+  try {
     statusEl.textContent = "카메라 켜는 중...";
     await openCamera();
   } catch (e) {
     releaseCamera();
-    statusEl.textContent = "시작 실패: " + e.message + " (카메라 권한을 허용했는지, https 주소인지 확인하세요)";
+    statusEl.textContent = "시작 실패: 카메라를 켜지 못했어요. 카메라 권한을 허용했는지 확인해 주세요. (" + e.message + ")";
     btn.disabled = false;
     return;
   }
