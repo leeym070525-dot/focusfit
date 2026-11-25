@@ -177,22 +177,3 @@ export function categoryName(key) {
   const label = CATEGORIES[key];
   return label ? label.split(" (")[0] : "";
 }
-
-// 저장 직후에 보여 줄 결과 문구 (app.py의 저장 메시지와 같다)
-export function resultMessage({ activity, elapsed, selfScore, ai }) {
-  const name = (activity || "").trim() || "활동 없음";
-  const lines = [`저장 완료: ${name} / ${formatTime(elapsed)} / 체감 ${selfScore}점`];
-  if (ai) {
-    const gap = ai.focus_percent - selfScore;
-    const compare = Math.abs(gap) < 5
-      ? "AI와 체감이 비슷해요"
-      : `AI가 체감보다 ${Math.abs(gap).toFixed(1)}점 ${gap > 0 ? "높게" : "낮게"} 봤어요`;
-    lines.push(`🤖 AI 점수 ${ai.focus_percent}점 (${compare})`);
-    lines.push(`고개 돌림/숙임 ${ai.head_turn_percent}% · 시선 이탈 ${ai.gaze_away_percent}% · ` +
-               `졸음 ${ai.drowsy_percent}% · 자리 이탈 ${ai.away_percent}%`);
-    lines.push(`하품 ${ai.yawn_count}회 (${ai.yawn_percent}%) · 피로 신호 ${ai.fatigue_percent}%`);
-  } else {
-    lines.push("(AI 분석 결과 없음: 카메라 미사용, 분석 불가, 또는 측정 시간이 너무 짧음)");
-  }
-  return lines;
-}

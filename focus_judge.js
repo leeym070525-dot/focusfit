@@ -52,8 +52,6 @@ export const STATES = {
   yawning: ["🥱 하품", false],
   fatigued: ["🟡 피로 신호 (정면이지만 하품·눈 감김이 잦음)", false],
 };
-// 점수에 집중으로 인정하는 비율 (나머지 상태는 0)
-export const SCORE_WEIGHTS = { focused: 1.0, fatigued: FATIGUE_CREDIT };
 
 // Python의 statistics.median과 같다 (개수가 짝수면 가운데 두 값의 평균)
 function median(values) {
